@@ -1,0 +1,75 @@
+# Typebot (builder + viewer) on the node's shared datastores.
+#
+#   builder  flow editor + admin UI      -> NEXTAUTH_URL         (e.g. typebot.example.com)
+#   viewer   serves bots + the chat API  -> NEXT_PUBLIC_VIEWER_URL (e.g. bot.example.com)
+#
+# No bundled Postgres/Redis: both come from the shared postgres_build /
+# redis_build stacks over the external "db" network. Ingress is Nginx Proxy
+# Manager over the "proxy" network; nothing is published publicly.
+#
+# Provision once on the shared Postgres (postgres_build DB_PROVISION does it):
+#   CREATE ROLE typebot LOGIN PASSWORD '...'; CREATE DATABASE typebot OWNER typebot;
+# The builder runs the Prisma migrations at start; the viewer waits for it.
+#
+# Use hex passwords: they are embedded in connection URLs unencoded.
+
+x-typebot: &typebot
+  restart: unless-stopped
+  env_file:
+    # Optional extras (OAuth providers, integrations) pass straight through.
+    - path: .env
+      required: false
+  environment: &typebot-env
+    DATABASE_URL: postgresql://${TYPEBOT_DB_USER:-typebot}:${TYPEBOT_DB_PASSWORD:?TYPEBOT_DB_PASSWORD is required}@${TYPEBOT_DB_HOST:-postgres}:${TYPEBOT_DB_PORT:-5432}/${TYPEBOT_DB_NAME:-typebot}
+    REDIS_URL: ${TYPEBOT_REDIS_URL:-}
+    # Same value on builder and viewer. Generate: openssl rand -base64 24
+    ENCRYPTION_SECRET: ${TYPEBOT_ENCRYPTION_SECRET:?TYPEBOT_ENCRYPTION_SECRET is required}
+    NEXTAUTH_URL: ${TYPEBOT_BUILDER_URL:?TYPEBOT_BUILDER_URL is required}
+    NEXT_PUBLIC_VIEWER_URL: ${TYPEBOT_VIEWER_URL:?TYPEBOT_VIEWER_URL is required}
+    # Gets the UNLIMITED plan (required to hide Typebot branding on bots).
+    ADMIN_EMAIL: ${TYPEBOT_ADMIN_EMAIL:?TYPEBOT_ADMIN_EMAIL is required}
+    DISABLE_SIGNUP: ${TYPEBOT_DISABLE_SIGNUP:-true}
+    # Login is by emailed magic link, so SMTP is effectively required.
+    SMTP_HOST: ${SMTP_HOST:-}
+    SMTP_PORT: ${SMTP_PORT:-587}
+    SMTP_SECURE: ${SMTP_SECURE:-false}
+    SMTP_USERNAME: ${SMTP_USERNAME:-}
+    SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    NEXT_PUBLIC_SMTP_FROM: ${SMTP_FROM:-}
+    # S3-compatible storage for uploads. Endpoint is a bare host (no scheme).
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+    S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+    S3_BUCKET: ${S3_BUCKET:-typebot}
+    S3_ENDPOINT: ${S3_ENDPOINT:-}
+    S3_REGION: ${S3_REGION:-}
+    S3_SSL: ${S3_SSL:-true}
+
+services:
+  typebot-builder:
+    <<: *typebot
+    image: baptistearno/typebot-builder:${TYPEBOT_VERSION:-3.19.0}
+    container_name: ${TYPEBOT_CONTAINER_PREFIX:-typebot}-builder
+    ports:
+      - "127.0.0.1:${TYPEBOT_BUILDER_PORT:-8090}:3000"
+    networks: [db, proxy]
+
+  typebot-viewer:
+    <<: *typebot
+    image: baptistearno/typebot-viewer:${TYPEBOT_VERSION:-3.19.0}
+    container_name: ${TYPEBOT_CONTAINER_PREFIX:-typebot}-viewer
+    depends_on:
+      # The builder applies the database migrations on start.
+      - typebot-builder
+    ports:
+      - "127.0.0.1:${TYPEBOT_VIEWER_PORT:-8091}:3000"
+    networks: [db, proxy]
+
+networks:
+  # Shared Postgres + Redis. Create once: docker network create db
+  db:
+    name: ${DB_NETWORK:-db}
+    external: true
+  # Shared with Nginx Proxy Manager only. Create once: docker network create proxy
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
