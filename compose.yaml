@@ -20,6 +20,10 @@ x-typebot: &typebot
     - path: .env
       required: false
   environment: &typebot-env
+    # Next.js binds to $HOSTNAME. Docker sets it to the container id, which
+    # resolves to the FIRST network only (db), leaving the proxy network and
+    # loopback unanswered. Listen on every interface instead.
+    HOSTNAME: 0.0.0.0
     DATABASE_URL: postgresql://${TYPEBOT_DB_USER:-typebot}:${TYPEBOT_DB_PASSWORD:?TYPEBOT_DB_PASSWORD is required}@${TYPEBOT_DB_HOST:-postgres}:${TYPEBOT_DB_PORT:-5432}/${TYPEBOT_DB_NAME:-typebot}
     REDIS_URL: ${TYPEBOT_REDIS_URL:-}
     # Same value on builder and viewer. Generate: openssl rand -base64 24
